@@ -1,46 +1,44 @@
-import os
 import socket
 
-# Definindo o IP do servidor e a porta de comunicação
-ip_servidor = '127.0.0.1'  # Endereço IP do servidor (usando o local para exemplo)
-porta_servidor = 12048    # Porta que o servidor está ouvindo
+# Cliente
 
-# Criando o socket UDP
-cliente = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+DIRBASE = "files/"
+SERVER = '127.0.0.1'
+PORT = 12345
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-# Pedindo o nome do arquivo ao usuário
-nome_arquivo = input("Digite o nome do arquivo que deseja receber: ")
+while True:
+    # Solicitando o arquivo ao usuário
+    fileName = input("Digite o nome do arquivo a ser solicitado: ")
 
-#Enviando o nome do arquivo para o servidor
-cliente.sendto(nome_arquivo.encode(), (ip_servidor, porta_servidor))
+    # Enviando solicitação ao servidor
+    print(f"Solicitando o arquivo {fileName} ao servidor {SERVER}:{PORT}")
+    sock.sendto(fileName.encode('utf-8'), (SERVER, PORT))
 
-# Recebendo o tamanho do arquivo do servidor
-tamanho_arquivo, _ = cliente.recvfrom(4096)
-tamanho_arquivo = int(tamanho_arquivo.decode())  # Converte para inteiro
+    #-------------------------------------------------------
+    # Recebendo o tamanho do arquivo
+    tamanho_arquivo_bytes, source = sock.recvfrom(4096)
+    tamanho_arquivo = int(tamanho_arquivo_bytes.decode())
 
-# Exibindo o tamanho do arquivo
-print(f"O tamanho do arquivo solicitado é {tamanho_arquivo} bytes.")
+    if tamanho_arquivo == 0:
+        print(f"Arquivo {fileName} não encontrado no servidor.")
+        continue
 
-#Verificando se o arquivo existe no servidor
-if tamanho_arquivo > 0:
-    #Preparando para salvar o arquivo recebido
-    arquivo_local = open(nome_arquivo, 'wb')
+    print(f"Tamanho do arquivo {fileName} recebido: {tamanho_arquivo} bytes.")
+    #-------------------------------------------------------
 
-    #Contagem de bytes recebidos
+    # Gravando o arquivo localmente
+    print(f"Gravando o arquivo {fileName}...")
+    fd = open(DIRBASE + fileName, 'wb')
+
     bytes_recebidos = 0
-
-    #Recebendo o arquivo em pedaços
     while bytes_recebidos < tamanho_arquivo:
-        dados, _ = cliente.recvfrom(4096)
-        arquivo_local.write(dados)
-        bytes_recebidos += len(dados)
+        data, source = sock.recvfrom(4096)
+        fd.write(data)
+        bytes_recebidos += len(data)
+        print(f"Recebidos {bytes_recebidos}/{tamanho_arquivo} bytes...")
 
-    #Fechando o arquivo local depois de receber tudo
-    arquivo_local.close()
-    print(f"Arquivo {nome_arquivo} recebido com sucesso!")
+    fd.close()
+    print(f"Arquivo {fileName} recebido e salvo com sucesso!\n")
 
-else:
-    print(f"O arquivo {nome_arquivo} não foi encontrado no servidor.")
-
-
-cliente.close()
+sock.close()
