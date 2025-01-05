@@ -1,20 +1,29 @@
 import socket
 
-# Configurações do cliente
-host = '127.0.0.1'
+ip = '127.0.0.1'
 porta = 12345
 
 # Criação do socket do cliente
 cliente_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
 # Conecta ao servidor
-cliente_socket.connect((host, porta))
+cliente_socket.connect((ip, porta))
 
-while True:
-    # Envia dados ao servidor
-    mensagem = "Olá, servidor!"
-    cliente_socket.sendall(mensagem.encode('utf-8'))
-    # Encerra a conexão
+
+try:
+    while True:
+        # Envia dados ao servidor
+        mensagem = input(">> ")
+        cliente_socket.sendall(mensagem.encode('utf-8'))
+        
+        dados = cliente_socket.recv(1024)
+        
+        
+    
     cliente_socket.close()
+
+except KeyboardInterrupt:
+    print("="*30 + "\n ⚠ CONEXÃO ENCERRADA ⚠\n" + "="*30)  
+
 
 
