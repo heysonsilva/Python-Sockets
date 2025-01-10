@@ -3,175 +3,129 @@ import os
 import glob
 import hashlib
 
-# Configurações do servidor
-ip_server = "localhost"
-port_server = 12345
-DIRBASE = "files/"  # Diretório onde os arquivos estão armazenados
+def configurar_servidor(host, porta, diretorio_base):
+    os.makedirs(diretorio_base, exist_ok=True)
+    servidor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    servidor.bind((host, porta))
+    servidor.listen()
+    print(f"Servidor rodando em {host}:{porta}")
+    return servidor
 
-# Criação do socket do servidor (IPv4, TCP)
-server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+def validar_caminho(diretorio_base, nome_arquivo):
+    """Valida se o caminho pertence à pasta permitida."""
+    caminho_absoluto = os.path.realpath(os.path.join(diretorio_base, nome_arquivo))
+    if not caminho_absoluto.startswith(os.path.realpath(diretorio_base)):
+        return None
+    return caminho_absoluto
 
-# Vincula o servidor ao IP e porta
-server.bind((ip_server, port_server))
+def listar_arquivos(conexao, diretorio_base):
+    arquivos = os.listdir(diretorio_base)
+    lista_arquivos = [
+        f"{arquivo} - {os.path.getsize(os.path.join(diretorio_base, arquivo))} bytes"
+        for arquivo in arquivos if os.path.isfile(os.path.join(diretorio_base, arquivo))
+    ]
+    resposta = "\n".join(lista_arquivos) if lista_arquivos else "Nenhum arquivo encontrado."
+    conexao.send(resposta.encode('utf-8'))
 
-# Inicia o servidor em modo "escuta"
-server.listen()
+def enviar_arquivo(conexao, diretorio_base, nome_arquivo):
+    caminho_arquivo = validar_caminho(diretorio_base, nome_arquivo)
+    if caminho_arquivo and os.path.exists(caminho_arquivo):
+        conexao.send(b"OK")
+        tamanho_arquivo = os.path.getsize(caminho_arquivo)
+        conexao.send(tamanho_arquivo.to_bytes(8, 'big'))
+        with open(caminho_arquivo, 'rb') as arquivo:
+            while chunk := arquivo.read(4096):
+                conexao.send(chunk)
+    else:
+        conexao.send(b"NAO_ENCONTRADO")
 
-print(f"Servidor esperando por conexões em {ip_server}:{port_server}")
+def enviar_multiplos_arquivos(conexao, diretorio_base, mascara):
+    # Ajuste para garantir que a máscara é aplicada dentro do diretório permitido
+    caminho_mascara = os.path.join(diretorio_base, mascara)
+    arquivos_correspondentes = glob.glob(caminho_mascara)
+    arquivos = [os.path.basename(f) for f in arquivos_correspondentes if os.path.isfile(f)]
 
-try:
+    if arquivos:
+        conexao.send(b"OK")
+        conexao.send(len(arquivos).to_bytes(4, 'big'))
+        for arquivo in arquivos:
+            caminho_arquivo = os.path.join(diretorio_base, arquivo)
+            conexao.send(arquivo.strip().encode('utf-8'))  # Remove espaços e caracteres extras
+            tamanho_arquivo = os.path.getsize(caminho_arquivo)
+            conexao.send(tamanho_arquivo.to_bytes(8, 'big'))
+            with open(caminho_arquivo, 'rb') as f:
+                while chunk := f.read(4096):
+                    conexao.send(chunk)
+    else:
+        conexao.send(b"NAO_ENCONTRADO")
+
+def calcular_hash(conexao, diretorio_base, nome_arquivo, quantidade_bytes):
+    caminho_arquivo = validar_caminho(diretorio_base, nome_arquivo)
+    if caminho_arquivo and os.path.isfile(caminho_arquivo):
+        with open(caminho_arquivo, 'rb') as arquivo:
+            dados = arquivo.read(quantidade_bytes)
+            hash_arquivo = hashlib.sha1(dados).hexdigest()
+        conexao.send(hash_arquivo.encode('utf-8'))
+    else:
+        conexao.send(b"NAO_ENCONTRADO")
+
+def continuar_download(conexao, diretorio_base, nome_arquivo, hash_parte_cliente):
+    caminho_arquivo = validar_caminho(diretorio_base, nome_arquivo)
+    if not caminho_arquivo or not os.path.exists(caminho_arquivo):
+        conexao.send(b"NAO_ENCONTRADO")
+        return
+
+    with open(caminho_arquivo, 'rb') as arquivo:
+        dados = arquivo.read()
+        hash_servidor = hashlib.sha1(dados).hexdigest()
+
+    if hash_parte_cliente != hash_servidor[:len(hash_parte_cliente)]:
+        conexao.send(b"HASH_INCORRETO")
+        return
+
+    conexao.send(b"OK")
+    tamanho_enviar = len(dados) - len(hash_parte_cliente)
+    conexao.send(tamanho_enviar.to_bytes(8, 'big'))
+
+    with open(caminho_arquivo, 'rb') as arquivo:
+        arquivo.seek(len(hash_parte_cliente))
+        while chunk := arquivo.read(4096):
+            conexao.send(chunk)
+
+def tratar_conexao(conexao, endereco, diretorio_base):
+    print(f"Conexão estabelecida com {endereco}")
+    try:
+        while True:
+            comando = conexao.recv(4096).decode('utf-8')
+            if not comando:
+                break
+
+            if comando.startswith('list'):
+                listar_arquivos(conexao, diretorio_base)
+            elif comando.startswith('sget'):
+                _, nome_arquivo = comando.split(maxsplit=1)
+                enviar_arquivo(conexao, diretorio_base, nome_arquivo)
+            elif comando.startswith('mget'):
+                _, mascara = comando.split(maxsplit=1)
+                enviar_multiplos_arquivos(conexao, diretorio_base, mascara)
+            elif comando.startswith('hash'):
+                _, nome_arquivo, quantidade_bytes = comando.split(maxsplit=2)
+                calcular_hash(conexao, diretorio_base, nome_arquivo, int(quantidade_bytes))
+            elif comando.startswith('cget'):
+                _, nome_arquivo, hash_parte = comando.split(maxsplit=2)
+                continuar_download(conexao, diretorio_base, nome_arquivo, hash_parte)
+            else:
+                conexao.send(b"COMANDO_INVALIDO")
+    finally:
+        conexao.close()
+
+def iniciar_servidor():
+    HOST = '127.0.0.1'
+    PORTA = 12345
+    DIRETORIO_BASE = 'files'
+    servidor = configurar_servidor(HOST, PORTA, DIRETORIO_BASE)
     while True:
-        # Aceita conexões de clientes
-        cliente, endereco = server.accept()
-        print(f"Conexão estabelecida com: {endereco}")
+        conexao, endereco = servidor.accept()
+        tratar_conexao(conexao, endereco, DIRETORIO_BASE)
 
-        try:
-            while True:
-                # Recebe o nome do arquivo ou comando solicitado
-                dadoSolicitado = cliente.recv(1024).decode('utf-8')
-
-                # Se não houver dados, encerra a conexão
-                if not dadoSolicitado:
-                    break
-
-                # Comando para listar arquivos
-                if dadoSolicitado.lower() == 'list':
-                    print("Solicitação de listagem de arquivos recebida.")
-                    arquivos = os.listdir(DIRBASE)
-
-                    if arquivos:
-                        for arquivo in arquivos:
-                            caminho_arquivo = os.path.join(DIRBASE, arquivo)
-                            if os.path.isfile(caminho_arquivo):
-                                tamanho_arquivo = os.path.getsize(caminho_arquivo)
-                                cliente.sendall(f"{arquivo} | {tamanho_arquivo} bytes\n".encode('utf-8'))
-                    else:
-                        cliente.sendall(b"Nenhum arquivo encontrado.\n")
-
-                    cliente.sendall(b"EOF")
-
-                # Comando para download de arquivo único
-                elif "sget " in dadoSolicitado.lower():
-                    arquivo_solicitado = dadoSolicitado[5:].strip()
-                    caminho_arquivo = os.path.realpath(os.path.join(DIRBASE, arquivo_solicitado))
-
-                    # Verifica se o arquivo está no diretório permitido
-                    if os.path.commonpath([caminho_arquivo, os.path.realpath(DIRBASE)]) != os.path.realpath(DIRBASE):
-                        cliente.sendall(b"Acesso negado. Arquivo fora da pasta permitida.\n")
-                        cliente.sendall(b"EOF")
-                        print(f"⚠ Tentativa de acesso a arquivo fora da pasta: {arquivo_solicitado}")
-                        continue
-
-                    if os.path.isfile(caminho_arquivo):
-                        print(f"✔ Enviando arquivo: {arquivo_solicitado}")
-                        try:
-                            with open(caminho_arquivo, "rb") as arquivo:
-                                while True:
-                                    dados = arquivo.read(4095)
-                                    if not dados:
-                                        break
-                                    cliente.sendall(dados)
-                            cliente.sendall(b"EOF")
-                            print(f"✔ Arquivo '{arquivo_solicitado}' enviado com sucesso!")
-                        except Exception as e:
-                            print(f"Erro ao ler o arquivo {arquivo_solicitado}: {e}")
-                            cliente.sendall(b"Erro ao enviar o arquivo.\n")
-                            cliente.sendall(b"EOF")
-                    else:
-                        cliente.sendall(f"Arquivo '{arquivo_solicitado}' não encontrado.\n".encode('utf-8'))
-                        cliente.sendall(b"EOF")
-
-                # Comando para download de múltiplos arquivos
-                elif "mget " in dadoSolicitado.lower():
-                    mascara = dadoSolicitado[5:].strip()
-                    print(f"✔ Solicitação de mget com máscara: {mascara}")
-
-                    # Obtém arquivos que correspondem à máscara
-                    arquivos_correspondentes = glob.glob(os.path.join(DIRBASE, mascara))
-
-                    if arquivos_correspondentes:
-                        for caminho_arquivo in arquivos_correspondentes:
-                            if os.path.isfile(caminho_arquivo):
-                                nome_arquivo = os.path.basename(caminho_arquivo)
-                                try:
-                                    # Envia mensagem de início do envio de um arquivo
-                                    cliente.sendall(f"START {nome_arquivo}\n".encode('utf-8'))
-
-                                    # Envia o conteúdo do arquivo
-                                    with open(caminho_arquivo, "rb") as arquivo:
-                                        while True:
-                                            dados = arquivo.read(4095)
-                                            if not dados:
-                                                cliente.sendall(b"EOF")
-                                                break
-                                            cliente.sendall(dados)
-
-                                    print(f"✔ Arquivo '{nome_arquivo}' enviado com sucesso!")
-
-                                except Exception as e:
-                                    print(f"Erro ao enviar o arquivo {nome_arquivo}: {e}")
-                                    cliente.sendall(f"Erro ao enviar o arquivo {nome_arquivo}.\n".encode('utf-8'))
-                                    cliente.sendall(b"EOF")
-                    else:
-                        # Envia mensagem de erro se nenhum arquivo corresponder à máscara
-                        cliente.sendall(b"Nenhum arquivo correspondente encontrado.\n")
-                        cliente.sendall(b"EOF")
-
-                    # Envia sinal de fim do comando `mget`
-                    cliente.sendall(b"MGET EOF")
-
-                # Comando para calcular o hash SHA1 até uma posição específica
-                elif "sha1 " in dadoSolicitado.lower():
-                    try:
-                        partes = dadoSolicitado.split()
-                        if len(partes) != 3:
-                            cliente.sendall(b"Comando invalido. Use: sha1 <arquivo> <posicao>\n")
-                            cliente.sendall(b"EOF")
-                            continue
-
-                        arquivo_solicitado, limite = partes[1], partes[2]
-
-                        try:
-                            limite = int(limite)
-                        except ValueError:
-                            cliente.sendall(b"Posicao invalida. Deve ser um numero inteiro.\n")
-                            cliente.sendall(b"EOF")
-                            continue
-
-                        caminho_arquivo = os.path.realpath(os.path.join(DIRBASE, arquivo_solicitado))
-
-                        # Verifica se o arquivo está na pasta files
-                        if os.path.commonpath([caminho_arquivo, os.path.realpath(DIRBASE)]) != os.path.realpath(DIRBASE):
-                            cliente.sendall(b"Acesso negado. Arquivo fora da pasta permitida.\n")
-                            cliente.sendall(b"EOF")
-                            continue
-
-                        if os.path.isfile(caminho_arquivo):
-                            print(f"✔ Calculando SHA1 do arquivo '{arquivo_solicitado}' até a posição {limite}.")
-                            hash_sha1 = hashlib.sha1()
-
-                            with open(caminho_arquivo, 'rb') as arquivo:
-                                conteudo = arquivo.read(limite)
-                                hash_sha1.update(conteudo)
-
-                            cliente.sendall(f"SHA1 até a posição {limite}: {hash_sha1.hexdigest()}\n".encode('utf-8'))
-                        else:
-                            cliente.sendall(f"Arquivo '{arquivo_solicitado}' não encontrado.\n".encode('utf-8'))
-
-                    except Exception as e:
-                        cliente.sendall(f"Erro ao calcular o hash: {str(e)}\n".encode('utf-8'))
-
-                    cliente.sendall(b"EOF")
-
-        except Exception as e:
-            print(f"⚠ Erro durante a comunicação com o cliente: {e}")
-
-        finally:
-            cliente.close()
-            print(f"Conexão encerrada com: {endereco}")
-
-except KeyboardInterrupt:
-    print("\n ❗ Servidor encerrado pelo usuário.")
-
-finally:
-    server.close()
+iniciar_servidor()

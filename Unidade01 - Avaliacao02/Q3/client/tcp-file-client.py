@@ -1,129 +1,131 @@
 import socket
 import os
+import hashlib
 
-# Configurações do cliente
-ip = 'localhost'
-porta = 12345
-DIRBASE = "files/"  # Diretório base para salvar arquivos
+HOST = '127.0.0.1'
+PORT = 12345
+DIRETORIO_BASE = 'files'
+os.makedirs(DIRETORIO_BASE, exist_ok=True)
 
-# Criação do socket do cliente
-cliente_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+def calcular_hash_parcial(caminho_arquivo):
+    """Calcula o hash SHA1 de um arquivo parcial."""
+    with open(caminho_arquivo, 'rb') as arquivo:
+        dados = arquivo.read()
+        return hashlib.sha1(dados).hexdigest()
 
-# Conecta ao servidor
-cliente_socket.connect((ip, porta))
-
-try:
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.connect((HOST, PORT))
+    print(f"Conectado ao servidor {HOST}:{PORT}")
+    
     while True:
-        # Solicita o nome do arquivo ou comando ao usuário
-        dadoSolicitado = input(
-            "\n -- COMANDOS DISPONÍVEIS --\n\n"
-            ">> sget <nome_arquivo>: BAIXAR ARQUIVO\n"
-            ">> mget <máscara>: BAIXAR ARQUIVOS COM MÁSCARA\n"
-            ">> list: LISTAR ARQUIVOS\n"
-            ">> sha1 <nome_do_arquivo> <posicao>: CALCULAR HASH SHA1\n"
-            ">> sair: ENCERRAR CONEXÃO\n ==> "
-        )
-
-        if dadoSolicitado.lower() == 'sair':
-            print(">> Encerrando a conexão...")
+        print("\n==== Comandos disponíveis ====\n")
+        print(">> list - Listar arquivos")
+        print(">> sget - Baixar um arquivo")
+        print(">> mget - Baixar múltiplos arquivos por máscara")
+        print(">> hash - Calcular hash de um arquivo")
+        print(">> cget - Continuar download de um arquivo")
+        print(">> sair - Encerrar conexão")
+        
+        comando = input("\nDigite o comando: ").lower()
+        if comando == "sair":
             break
 
-        # Envia o comando ao servidor
-        cliente_socket.sendall(dadoSolicitado.encode('utf-8'))
+        if comando == "list":
+            sock.send(comando.encode('utf-8'))
+            resposta = sock.recv(4096).decode('utf-8')
+            print(resposta)
 
-        if dadoSolicitado.lower() == 'list':
-            print("\n>>> Listando arquivos disponíveis no servidor:\n")
-            while True:
-                dados = cliente_socket.recv(4096).decode('utf-8')
-                if dados == "EOF":
-                    print("\n >>> Fim da listagem <<<")
-                    break
-                print(dados.strip())
+        elif comando == "sget":
+            nome_arquivo = input("Digite o nome do arquivo para download: ")
+            caminho_arquivo = os.path.join(DIRETORIO_BASE, nome_arquivo)
 
-        elif 'sget ' in dadoSolicitado.lower():
-            arquivo_solicitado = dadoSolicitado[5:]
-            caminho_arquivo = os.path.join(DIRBASE, arquivo_solicitado)
+            # Verifica se o arquivo já existe
+            if os.path.exists(caminho_arquivo):
+                overwrite = input(f"O arquivo '{nome_arquivo}' já existe. Deseja sobrescrever? (s/n): ").lower()
+                if overwrite != 's':
+                    print("Download cancelado pelo usuário.")
+                    continue
 
-            print(f"Solicitando o download do arquivo: {arquivo_solicitado}")
+            sock.send(f"{comando} {nome_arquivo}".encode('utf-8'))
+            status = sock.recv(4096).decode('utf-8')
 
-            if not os.path.exists(DIRBASE):
-                os.makedirs(DIRBASE)
-
-            with open(caminho_arquivo, 'wb') as arquivo:
-                while True:
-                    dados = cliente_socket.recv(4096)
-                    if dados == b"EOF":
-                        print(">>> Fim da transmissão <<<")
-                        break
-                    if dados:
+            if status == "OK":
+                tamanho_arquivo = int.from_bytes(sock.recv(8), 'big')
+                with open(caminho_arquivo, 'wb') as arquivo:
+                    recebido = 0
+                    while recebido < tamanho_arquivo:
+                        dados = sock.recv(4096)
                         arquivo.write(dados)
+                        recebido += len(dados)
+                print(f"Download do arquivo '{nome_arquivo}' concluído.")
+            elif status == "NAO_ENCONTRADO":
+                print("Arquivo não encontrado no servidor.")
+            else:
+                print("Erro desconhecido do servidor.")
 
-            print(f"\u2714 Arquivo '{arquivo_solicitado}' recebido e salvo em '{caminho_arquivo}' \u2714")
-
-        elif 'mget ' in dadoSolicitado.lower():
-            mascara = dadoSolicitado[5:].strip()
-            print(f"Solicitando download de arquivos com máscara: {mascara}")
-
-            # Certifique-se de que o diretório base existe
-            if not os.path.exists(DIRBASE):
-                os.makedirs(DIRBASE)
-
-            while True:
-                # Recebe mensagem do servidor
-                dados = cliente_socket.recv(4096).decode('utf-8')
-
-                # Verifica se é o início de um novo arquivo
-                if dados.startswith("START "):
-                    nome_arquivo = dados[6:].strip()  # Obtém o nome do arquivo
-                    caminho_arquivo = os.path.join(DIRBASE, nome_arquivo)
-
-                    # Verifica se o arquivo já existe no cliente
+        elif comando == "mget":
+            mascara = input("Digite a máscara (ex: *.txt): ")
+            sock.send(f"{comando} {mascara}".encode('utf-8'))
+            status = sock.recv(4096)
+            if status == b"OK":
+                num_arquivos = int.from_bytes(sock.recv(4), 'big')
+                print(f"{num_arquivos} arquivos encontrados.")
+                for _ in range(num_arquivos):
+                    nome_arquivo = sock.recv(4096).decode('utf-8')
+                    tamanho_arquivo = int.from_bytes(sock.recv(8), 'big')
+                    caminho_arquivo = os.path.join(DIRETORIO_BASE, nome_arquivo)
                     if os.path.exists(caminho_arquivo):
-                        sobrescrever = input(f"Arquivo '{nome_arquivo}' já existe. Deseja sobrescrever? (s/n): ").lower()
-                        if sobrescrever != 's':
-                            print(f"\u26a0 Arquivo '{nome_arquivo}' ignorado.")
-                            # Continua para o próximo arquivo
+                        overwrite = input(f"O arquivo '{nome_arquivo}' já existe. Sobrescrever? (s/n): ").lower()
+                        if overwrite != 's':
+                            print(f"Arquivo '{nome_arquivo}' ignorado.")
+                            sock.recv(tamanho_arquivo)  # Ignora os dados do arquivo
                             continue
-
-                    # Recebe e grava o arquivo
-                    print(f"Recebendo arquivo: {nome_arquivo}")
                     with open(caminho_arquivo, 'wb') as arquivo:
-                        while True:
-                            dados = cliente_socket.recv(4096)
-                            if dados == b"EOF":  # Sinal de fim do arquivo
-                                print(f"\u2714 Arquivo '{nome_arquivo}' recebido com sucesso!\n")
-                                break
+                        recebido = 0
+                        while recebido < tamanho_arquivo:
+                            dados = sock.recv(4096)
                             arquivo.write(dados)
+                            recebido += len(dados)
+                    print(f"Download do arquivo '{nome_arquivo}' concluído.")
+            elif status == b"NAO_ENCONTRADO":
+                print("Nenhum arquivo correspondente encontrado no servidor.")
+            else:
+                print("Erro desconhecido do servidor.")
 
-                # Verifica se é o fim do processo de mget
-                elif dados == "MGET EOF":  # Sinal específico para o fim de `mget`
-                    print("\n>>> Fim do download dos arquivos <<<")
-                    break
+        elif comando == "hash":
+            nome_arquivo = input("Digite o nome do arquivo: ")
+            num_bytes = input("Quantos bytes iniciais para hash? ").strip()
+            sock.send(f"{comando} {nome_arquivo} {num_bytes}".encode('utf-8'))
+            resposta = sock.recv(4096).decode('utf-8')
+            print(resposta)
 
-                # Exibe mensagens de erro ou alertas
-                elif "Erro" in dados or "nenhum arquivo" in dados.lower():
-                    print(dados.strip())
-                    break
+        elif comando == "cget":
+            nome_arquivo = input("Digite o nome do arquivo para continuar o download: ")
+            caminho_arquivo = os.path.join(DIRETORIO_BASE, nome_arquivo)
 
-        elif 'sha1 ' in dadoSolicitado.lower():
-            try:
-                cliente_socket.sendall(dadoSolicitado.encode('utf-8'))
-                print(f"Solicitando SHA1 para o arquivo especificado...")
+            if not os.path.exists(caminho_arquivo):
+                print(f"O arquivo '{nome_arquivo}' não existe no cliente.")
+                continue
 
-                while True:
-                    dados = cliente_socket.recv(4096).decode('utf-8')
-                    if dados == "EOF":
-                        break
-                    print(dados.strip())
+            hash_parte = calcular_hash_parcial(caminho_arquivo)
+            sock.send(f"{comando} {nome_arquivo} {hash_parte}".encode('utf-8'))
+            status = sock.recv(4096).decode('utf-8')
 
-            except Exception as e:
-                print(f"Erro ao solicitar o SHA1: {e}")
+            if status == "NAO_ENCONTRADO":
+                print("Arquivo não encontrado no servidor.")
+            elif status == "HASH_INCORRETO":
+                print("Hash do cliente não corresponde ao hash do servidor.")
+            elif status == "OK":
+                tamanho_enviar = int.from_bytes(sock.recv(8), 'big')
+                with open(caminho_arquivo, 'ab') as arquivo:
+                    recebido = 0
+                    while recebido < tamanho_enviar:
+                        dados = sock.recv(4096)
+                        arquivo.write(dados)
+                        recebido += len(dados)
+                print(f"Download do arquivo '{nome_arquivo}' continuado com sucesso.")
+            else:
+                print("Erro desconhecido.")
 
         else:
-            print("Comando inválido. Tente novamente.")
-
-except KeyboardInterrupt:
-    print("\n" + "=" * 30 + "\n \u26a0 CONEXÃO ENCERRADA \u26a0\n" + "=" * 30)
-
-finally:
-    cliente_socket.close()
+            print("Comando inválido.")
