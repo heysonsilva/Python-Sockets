@@ -3,6 +3,8 @@ import os
 import glob
 import hashlib
 
+#  essa função define os protocolos de rede e transporte do algoritmo, e com os
+# metodos bind() e listen() liga o servidor e deixa ele em estado de escuta, respectivamente 
 def configurar_servidor(host, porta, diretorio_base):
     os.makedirs(diretorio_base, exist_ok=True)
     servidor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -11,14 +13,15 @@ def configurar_servidor(host, porta, diretorio_base):
     print(f"Servidor rodando em {host}:{porta}")
     return servidor
 
+# Validar se o caminho pertence à pasta permitida.
 def validar_caminho(diretorio_base, nome_arquivo):
-    """Valida se o caminho pertence à pasta permitida."""
     caminho_absoluto = os.path.realpath(os.path.join(diretorio_base, nome_arquivo))
     if not caminho_absoluto.startswith(os.path.realpath(diretorio_base)):
         return None
     return caminho_absoluto
 
-def listar_arquivos(conexao, diretorio_base):
+# Listagem de Arquivos
+def listar_arquivos(conexao, diretorio_base): 
     arquivos = os.listdir(diretorio_base)
     lista_arquivos = [
         f"{arquivo} - {os.path.getsize(os.path.join(diretorio_base, arquivo))} bytes"
@@ -26,7 +29,7 @@ def listar_arquivos(conexao, diretorio_base):
     ]
     resposta = "\n".join(lista_arquivos) if lista_arquivos else "Nenhum arquivo encontrado."
     conexao.send(resposta.encode('utf-8'))
-
+# Função de envio de arquivos
 def enviar_arquivo(conexao, diretorio_base, nome_arquivo):
     caminho_arquivo = validar_caminho(diretorio_base, nome_arquivo)
     if caminho_arquivo and os.path.exists(caminho_arquivo):
@@ -91,7 +94,7 @@ def continuar_download(conexao, diretorio_base, nome_arquivo, hash_parte_cliente
         arquivo.seek(len(hash_parte_cliente))
         while chunk := arquivo.read(4096):
             conexao.send(chunk)
-
+# Funcao responsavel por determinar qual resposta será enviado para o cliente
 def tratar_conexao(conexao, endereco, diretorio_base):
     print(f"Conexão estabelecida com {endereco}")
     try:
@@ -119,6 +122,7 @@ def tratar_conexao(conexao, endereco, diretorio_base):
     finally:
         conexao.close()
 
+# essa é a função principal do algoritmo
 def iniciar_servidor():
     HOST = '127.0.0.1'
     PORTA = 12345

@@ -8,7 +8,7 @@ DIRETORIO_BASE = 'files'
 os.makedirs(DIRETORIO_BASE, exist_ok=True)
 
 def calcular_hash_parcial(caminho_arquivo):
-    """Calcula o hash SHA1 de um arquivo parcial."""
+    # Calcula o hash SHA1 de um arquivo parcial.
     with open(caminho_arquivo, 'rb') as arquivo:
         dados = arquivo.read()
         return hashlib.sha1(dados).hexdigest()
